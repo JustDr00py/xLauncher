@@ -11,7 +11,7 @@ A light, fast home screen for **Onn 4K Stick / Onn 4K Box & Pro** (Google TV, An
   - Accent color (4), background (4, including blurred featured art), clock 12h/24h/hidden, app names on/off
   - Shortcuts to Android's own settings pages
 
-Release APK is about 2 MB. There's no network access, no accounts and no tracking.
+Release APK is about 2 MB. No accounts, no analytics, no tracking. The only network traffic is the update check against this repo's GitHub Releases: at most once a day, plus whenever you press **Settings › About**.
 
 ## Build
 
@@ -47,6 +47,25 @@ scripts/revert.sh 192.168.0.100 --uninstall  # …and remove xLauncher
 ```
 
 A factory reset also restores everything.
+
+## Updates
+
+xLauncher updates itself from this repo's [Releases](https://github.com/JustDr00py/xLauncher/releases):
+
+- **Settings › About** shows the version. Press it to check now.
+- When a newer release exists, the settings button on Home gets a dot, and the update moves to the top of Settings.
+- Pressing **Update** downloads the APK and opens Android's install prompt. The first time, Android asks you to allow "Install unknown apps" for xLauncher.
+- Before installing, xLauncher checks that the APK is xLauncher, is newer than what's installed, and is signed with the same key. Anything else is refused.
+
+### Publishing a release
+
+```bash
+scripts/release.sh 1.1.0 "What changed"
+```
+
+The script bumps the version, builds and checks the signature against `keystore.properties`, then commits, tags, pushes and creates the GitHub release with the APK attached.
+
+**Back up `~/.android/xlauncher-release.jks` and `keystore.properties`.** Without them you can't publish updates that installed copies will accept.
 
 ## Speed tips
 
