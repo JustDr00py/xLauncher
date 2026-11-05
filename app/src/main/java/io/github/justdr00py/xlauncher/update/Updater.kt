@@ -122,6 +122,10 @@ class Updater(
                 commit(apk)
             } catch (e: Exception) {
                 _state.value = UpdateState.Failed(e.shortMessage(), release)
+            } finally {
+                // Android's installer keeps its own copy once the session is written, so the
+                // download is never needed again: success, failure or cancel.
+                downloadDir().deleteRecursively()
             }
         }
     }
@@ -173,7 +177,7 @@ class Updater(
     }
 
     private suspend fun download(release: Release): File = withContext(Dispatchers.IO) {
-        val dir = File(context.cacheDir, "updates/${target.packageName}").apply { deleteRecursively(); mkdirs() }
+        val dir = downloadDir().apply { deleteRecursively(); mkdirs() }
         val out = File(dir, "${target.label}-${release.version}.apk")
         val conn = open(release.apkUrl, "application/octet-stream")
         val total = conn.contentLengthLong.takeIf { it > 0 } ?: release.apkSize
@@ -235,6 +239,8 @@ class Updater(
             session.commit(callback.intentSender)
         }
     }
+
+    private fun downloadDir() = File(context.cacheDir, "updates/${target.packageName}")
 
     private fun openInstallPermissionSettings() {
         val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))

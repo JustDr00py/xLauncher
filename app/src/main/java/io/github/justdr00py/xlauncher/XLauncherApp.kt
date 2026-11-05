@@ -9,6 +9,7 @@ import io.github.justdr00py.xlauncher.update.Updater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** Holds the two process-wide singletons. Plain fields instead of a DI framework keep startup fast. */
 class XLauncherApp : Application() {
@@ -27,6 +28,8 @@ class XLauncherApp : Application() {
         super.onCreate()
         prefs = LauncherPrefs(this)
         apps = AppRepository(this, scope).also { it.start() }
+        // Leftovers from an update interrupted by a crash or reboot.
+        scope.launch(Dispatchers.IO) { java.io.File(cacheDir, "updates").deleteRecursively() }
         updaters = listOf(
             Updater(this, scope, UpdateTarget("xLauncher", packageName, "JustDr00py/xLauncher", includePrereleases = false)),
             Updater(this, scope, UpdateTarget("xFIN", XFIN_PACKAGE, "JustDr00py/xFIN", includePrereleases = true)),
