@@ -21,8 +21,8 @@ android {
         // Onn 4K Stick / Box ship Android 12 (API 31) or newer.
         minSdk = 31
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.0.2"
     }
 
     signingConfigs {
