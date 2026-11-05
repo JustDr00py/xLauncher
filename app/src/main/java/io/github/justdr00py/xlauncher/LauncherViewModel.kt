@@ -9,6 +9,7 @@ import io.github.justdr00py.xlauncher.prefs.ClockMode
 import io.github.justdr00py.xlauncher.prefs.LauncherSettings
 import io.github.justdr00py.xlauncher.prefs.XFIN_PACKAGE
 import io.github.justdr00py.xlauncher.system.bootCount
+import io.github.justdr00py.xlauncher.update.UpdateState
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -47,7 +48,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private val graph = app as XLauncherApp
     private val prefs = graph.prefs
-    val updater = graph.updater
+    val updaters = graph.updaters
+
+    /** True when any app has an update waiting; drives the dot on the settings button. */
+    val updateAvailable: StateFlow<Boolean> =
+        combine(updaters.map { it.state }) { states -> states.any { it is UpdateState.Available } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val state: StateFlow<HomeUiState> =
         combine(graph.apps.apps, prefs.settings) { apps, settings -> build(apps, settings) }

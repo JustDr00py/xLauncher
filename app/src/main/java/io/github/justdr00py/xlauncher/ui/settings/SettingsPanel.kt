@@ -59,7 +59,6 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Switch
 import androidx.tv.material3.Text
-import io.github.justdr00py.xlauncher.BuildConfig
 import io.github.justdr00py.xlauncher.HomeUiState
 import io.github.justdr00py.xlauncher.LauncherViewModel
 import io.github.justdr00py.xlauncher.apps.AppEntry
@@ -83,8 +82,9 @@ fun SettingsPanel(state: HomeUiState, vm: LauncherViewModel, onDismiss: () -> Un
     var picker by remember { mutableStateOf<Picker?>(null) }
     val firstItem = remember { FocusRequester() }
     val visible = remember { MutableTransitionState(false).apply { targetState = true } }
-    val update by vm.updater.state.collectAsState()
-    val updateAvailable = update is UpdateState.Available
+    val updates = vm.updaters.map { it to it.state.collectAsState().value }
+    val pending = updates.filter { (_, s) -> s is UpdateState.Available }
+    val updateAvailable = pending.isNotEmpty()
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterEnd) {
@@ -110,9 +110,10 @@ fun SettingsPanel(state: HomeUiState, vm: LauncherViewModel, onDismiss: () -> Un
                         }
 
                         // A pending update goes first so it gets focus when the panel opens.
-                        if (updateAvailable) {
+                        pending.forEachIndexed { i, (updater, s) ->
                             item {
-                                UpdateRow(update, vm.updater, Modifier.padding(top = 16.dp).focusRequester(firstItem))
+                                val focus = if (i == 0) Modifier.focusRequester(firstItem) else Modifier
+                                UpdateRow(s, updater, Modifier.padding(top = if (i == 0) 16.dp else 0.dp).then(focus))
                             }
                         }
 
@@ -205,7 +206,7 @@ fun SettingsPanel(state: HomeUiState, vm: LauncherViewModel, onDismiss: () -> Un
                         }
 
                         item { Header("About") }
-                        item { UpdateRow(update, vm.updater) }
+                        updates.forEach { (updater, s) -> item { UpdateRow(s, updater) } }
                     }
                 }
             }
@@ -240,15 +241,18 @@ fun SettingsPanel(state: HomeUiState, vm: LauncherViewModel, onDismiss: () -> Un
 /** One row that shows the update state and does the next sensible thing when pressed. */
 @Composable
 private fun UpdateRow(state: UpdateState, updater: Updater, modifier: Modifier = Modifier) {
-    val current = "xLauncher ${BuildConfig.VERSION_NAME}"
+    val name = updater.target.label
+    val installed = remember(state) { updater.installedVersion() }
+    val current = if (installed != null) "$name $installed" else "$name (not installed)"
+    val verb = if (installed != null) "Update" else "Install"
     val (title, value) = when (state) {
         UpdateState.Idle -> current to "Press OK to check for updates"
         UpdateState.Checking -> current to "Checking GitHub…"
         is UpdateState.UpToDate -> current to "Up to date · checked ${ago(state.checkedAt)}"
-        is UpdateState.Available -> "Update to ${state.release.version}" to "Press OK to download and install"
+        is UpdateState.Available -> "$verb $name ${state.release.version}" to "Press OK to download and install"
         is UpdateState.Downloading ->
-            "Downloading ${state.release.version}" to "${(state.progress * 100).toInt()}%"
-        is UpdateState.Installing -> "Installing ${state.release.version}" to "Confirm on the next screen"
+            "Downloading $name ${state.release.version}" to "${(state.progress * 100).toInt()}%"
+        is UpdateState.Installing -> "Installing $name ${state.release.version}" to "Confirm on the next screen"
         is UpdateState.Failed -> current to state.message
     }
     SettingRow(

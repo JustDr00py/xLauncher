@@ -72,7 +72,6 @@ import io.github.justdr00py.xlauncher.system.rememberNow
 import io.github.justdr00py.xlauncher.system.requestUninstall
 import io.github.justdr00py.xlauncher.ui.settings.SettingsPanel
 import io.github.justdr00py.xlauncher.ui.theme.backdropAt
-import io.github.justdr00py.xlauncher.update.UpdateState
 import kotlinx.coroutines.flow.Flow
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -87,8 +86,7 @@ fun LauncherRoot(state: HomeUiState, vm: LauncherViewModel, homePresses: Flow<Un
     var menuFor by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val heroFocus = remember { FocusRequester() }
-    val update by vm.updater.state.collectAsState()
-    val updateAvailable = update is UpdateState.Available
+    val updateAvailable by vm.updateAvailable.collectAsState()
 
     // Pressing Home while already home: close any overlay and jump back to the featured app.
     LaunchedEffect(homePresses) {

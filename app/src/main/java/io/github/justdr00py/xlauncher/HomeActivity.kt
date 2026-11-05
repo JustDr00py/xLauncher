@@ -39,7 +39,7 @@ class HomeActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        (application as XLauncherApp).updater.checkDaily()
+        (application as XLauncherApp).updaters.forEach { it.checkDaily() }
     }
 
     override fun onNewIntent(intent: Intent) {

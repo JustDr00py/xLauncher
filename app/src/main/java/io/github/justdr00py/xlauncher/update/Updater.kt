@@ -18,10 +18,20 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+
+/** An app that can be updated from a GitHub repo's releases. */
+data class UpdateTarget(
+    val label: String,
+    val packageName: String,
+    val repo: String,
+    /** Also consider releases marked "Pre-release" (xFIN ships those). */
+    val includePrereleases: Boolean,
+)
 
 /** A newer release found on GitHub. */
 data class Release(val version: String, val apkUrl: String, val apkSize: Long, val notes: String)
@@ -38,21 +48,37 @@ sealed interface UpdateState {
 }
 
 /**
- * Self-updater backed by GitHub Releases. It only talks to the network when asked: when the user
- * presses the Settings row, or for the quiet check at most once a day. Installing always goes
+ * Updates one app from GitHub Releases. It only talks to the network when asked: when the user
+ * presses its Settings row, or for the quiet check at most once a day. Installing always goes
  * through Android's own confirmation prompt.
  */
-class Updater(private val context: Context, private val scope: CoroutineScope) {
-
+class Updater(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    val target: UpdateTarget,
+) {
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
 
     private val prefs = context.getSharedPreferences("updates", Context.MODE_PRIVATE)
+    private val lastCheckKey = "last_check:${target.packageName}"
     private var job: Job? = null
+
+    private val isSelf get() = target.packageName == context.packageName
+
+    /** Installed version name, or null when the app isn't installed. */
+    fun installedVersion(): String? =
+        if (isSelf) {
+            BuildConfig.VERSION_NAME
+        } else {
+            runCatching {
+                context.packageManager.getPackageInfo(target.packageName, PackageManager.PackageInfoFlags.of(0)).versionName
+            }.getOrNull()
+        }
 
     /** Checks GitHub if the last check was more than a day ago. Stays silent on failure. */
     fun checkDaily() {
-        val last = prefs.getLong(KEY_LAST_CHECK, 0L)
+        val last = prefs.getLong(lastCheckKey, 0L)
         if (System.currentTimeMillis() - last < DAY_MS) {
             if (_state.value == UpdateState.Idle && last > 0) _state.value = UpdateState.UpToDate(last)
             return
@@ -65,10 +91,11 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
         job = scope.launch {
             if (!quiet) _state.value = UpdateState.Checking
             _state.value = try {
-                val release = fetchLatest()
+                val release = fetchNewest()
                 val now = System.currentTimeMillis()
-                prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
-                if (release != null && isNewer(release.version, BuildConfig.VERSION_NAME)) {
+                prefs.edit().putLong(lastCheckKey, now).apply()
+                val installed = installedVersion()
+                if (release != null && (installed == null || isNewer(release.version, installed))) {
                     UpdateState.Available(release)
                 } else {
                     UpdateState.UpToDate(now)
@@ -112,25 +139,42 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
         }
     }
 
-    private suspend fun fetchLatest(): Release? = withContext(Dispatchers.IO) {
-        val conn = open(LATEST_RELEASE_URL, "application/vnd.github+json")
-        val json = conn.inputStream.bufferedReader().use { JSONObject(it.readText()) }
-        val assets = json.optJSONArray("assets") ?: return@withContext null
+    /** The highest-versioned release that has an APK attached. */
+    private suspend fun fetchNewest(): Release? = withContext(Dispatchers.IO) {
+        val base = "https://api.github.com/repos/${target.repo}/releases"
+        val releases: List<JSONObject> = if (target.includePrereleases) {
+            val text = open("$base?per_page=20", JSON).inputStream.bufferedReader().use { it.readText() }
+            val array = JSONArray(text)
+            (0 until array.length()).map { array.getJSONObject(it) }.filterNot { it.optBoolean("draft") }
+        } else {
+            listOf(open("$base/latest", JSON).inputStream.bufferedReader().use { JSONObject(it.readText()) })
+        }
+        releases.mapNotNull { it.toRelease() }.maxWithOrNull { a, b ->
+            when {
+                isNewer(a.version, b.version) -> 1
+                isNewer(b.version, a.version) -> -1
+                else -> 0
+            }
+        }
+    }
+
+    private fun JSONObject.toRelease(): Release? {
+        val assets = optJSONArray("assets") ?: return null
         val apk = (0 until assets.length())
             .map { assets.getJSONObject(it) }
             .firstOrNull { it.optString("name").endsWith(".apk", ignoreCase = true) }
-            ?: return@withContext null
-        Release(
-            version = json.getString("tag_name").removePrefix("v"),
+            ?: return null
+        return Release(
+            version = getString("tag_name").removePrefix("v"),
             apkUrl = apk.getString("browser_download_url"),
             apkSize = apk.optLong("size"),
-            notes = json.optString("body").trim(),
+            notes = optString("body").trim(),
         )
     }
 
     private suspend fun download(release: Release): File = withContext(Dispatchers.IO) {
-        val dir = File(context.cacheDir, "updates").apply { deleteRecursively(); mkdirs() }
-        val out = File(dir, "xlauncher-${release.version}.apk")
+        val dir = File(context.cacheDir, "updates/${target.packageName}").apply { deleteRecursively(); mkdirs() }
+        val out = File(dir, "${target.label}-${release.version}.apk")
         val conn = open(release.apkUrl, "application/octet-stream")
         val total = conn.contentLengthLong.takeIf { it > 0 } ?: release.apkSize
         _state.value = UpdateState.Downloading(release, 0f)
@@ -155,13 +199,14 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
         out
     }
 
-    /** Rejects anything that isn't a newer xLauncher signed with the same key, before bothering Android. */
+    /** Rejects anything that isn't the right app, newer, and signed with the installed copy's key. */
     private fun verify(apk: File) {
         val pm = context.packageManager
         val flags = PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
         val incoming = pm.getPackageArchiveInfo(apk.path, flags) ?: error("Downloaded file isn't a valid APK")
-        check(incoming.packageName == context.packageName) { "Downloaded APK is a different app" }
-        val installed = pm.getPackageInfo(context.packageName, flags)
+        check(incoming.packageName == target.packageName) { "Downloaded APK is a different app" }
+        // Not installed yet: nothing to compare against, so this is a fresh install.
+        val installed = runCatching { pm.getPackageInfo(target.packageName, flags) }.getOrNull() ?: return
         check(incoming.longVersionCode > installed.longVersionCode) { "Downloaded APK isn't newer" }
         val mine = installed.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
         val theirs = incoming.signingInfo?.apkContentsSigners?.map { it.toCharsString() }?.toSet()
@@ -171,7 +216,7 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
     private suspend fun commit(apk: File) = withContext(Dispatchers.IO) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-            setAppPackageName(context.packageName)
+            setAppPackageName(target.packageName)
             setSize(apk.length())
         }
         val id = installer.createSession(params)
@@ -183,7 +228,8 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
             val callback = PendingIntent.getBroadcast(
                 context,
                 id,
-                Intent(context, InstallResultReceiver::class.java),
+                Intent(context, InstallResultReceiver::class.java)
+                    .putExtra(InstallResultReceiver.EXTRA_TARGET, target.packageName),
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
             session.commit(callback.intentSender)
@@ -209,9 +255,7 @@ class Updater(private val context: Context, private val scope: CoroutineScope) {
         }
 
     companion object {
-        const val REPO = "JustDr00py/xLauncher"
-        private const val LATEST_RELEASE_URL = "https://api.github.com/repos/$REPO/releases/latest"
-        private const val KEY_LAST_CHECK = "last_check"
+        private const val JSON = "application/vnd.github+json"
         private const val DAY_MS = 24 * 60 * 60 * 1000L
 
         /** Compares dotted versions numerically, so 1.10.0 > 1.9.2. */
@@ -240,6 +284,12 @@ class InstallResultReceiver : BroadcastReceiver() {
             return
         }
         val app = context.applicationContext as? XLauncherApp ?: return
-        app.updater.onInstallResult(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
+        val target = intent.getStringExtra(EXTRA_TARGET)
+        app.updaters.firstOrNull { it.target.packageName == target }
+            ?.onInstallResult(status, intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
+    }
+
+    companion object {
+        const val EXTRA_TARGET = "target"
     }
 }
