@@ -25,13 +25,42 @@ Without a `keystore.properties` file, the release build is signed with the debug
 
 ## Install on the Onn
 
-1. On the TV, go to **Settings → System → About** and press OK on *Android TV OS build* 7 times to unlock Developer options.
-2. In **Developer options**, turn on *USB debugging* / *Wireless debugging*.
-3. Run:
+### New device checklist
 
-```bash
-scripts/install.sh 192.168.0.100        # your stick's IP
-```
+1. **Finish Google TV setup** and connect to Wi-Fi.
+2. **Re-join Wi-Fi from Settings:** go to **Settings → Network & Internet**, pick your network, *Forget*, then join it again and enter the password. This moves the saved network from the setup app to the system, so step 6 can disable the setup app without losing Wi-Fi (see *Wi-Fi safety* below).
+3. **Unlock Developer options:** go to **Settings → System → About** and press OK on *Android TV OS build* 7 times.
+4. **Turn on Wireless debugging** in **Settings → System → Developer options**, then open it. It shows the stick's `IP:port`. That port changes every time Wireless debugging is turned on, and Wireless debugging turns itself off after a reboot.
+5. **Pair once per computer:** choose *Pair device with pairing code* on the TV, then run:
+
+   ```bash
+   adb pair 192.168.0.100:41234 123456     # pairing IP:port and code shown on the TV
+   ```
+
+6. **Get the APK and install it.** Either download `xLauncher-<version>.apk` from [Releases](https://github.com/JustDr00py/xLauncher/releases) or build it (see *Build*), then run the script with the `IP:port` from step 4:
+
+   ```bash
+   scripts/install.sh 192.168.0.100:37155 ~/Downloads/xLauncher-1.0.3.apk
+   # or, after building locally:
+   scripts/install.sh 192.168.0.100:37155
+   ```
+
+   If no port is given, the script uses 5555, which only works with classic network debugging.
+7. **Speed up the first launch** (optional, see *Speed tips*):
+
+   ```bash
+   adb -s 192.168.0.100:37155 shell cmd package compile -m speed-profile -f io.github.justdr00py.xlauncher
+   ```
+
+8. **Install xFIN:**
+   - Press Home and open xLauncher's settings (the gear). Under **About**, press OK on **xFIN (not installed)** to check GitHub.
+   - Press OK again on **Install xFIN \<version\>**.
+   - Android asks once to allow "Install unknown apps" for xLauncher.
+9. **Optional:** in xLauncher's settings, turn on **Open featured app at startup** so xFIN opens after every reboot.
+
+Wireless debugging can stay off afterwards. Updates for both apps come through xLauncher's settings.
+
+### What install.sh does
 
 The script installs the APK, sets xLauncher as the Home activity and disables the stock Google TV launcher (`launcherx`) plus `setupwraith`, the Onn fallback home screen. Without that last step, Google TV takes Home back.
 
