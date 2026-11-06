@@ -23,29 +23,35 @@ adb shell cmd package set-home-activity "$HOME_ACTIVITY"
 
 # Android deletes the Wi-Fi networks an app saved when that app is disabled. On a freshly set-up
 # Onn, the home Wi-Fi was saved by the setup app (setupwraith), so disabling it blindly wipes the
-# password and drops the connection. Skip any package that owns a saved network.
+# password and drops the connection.
+#
+# All or nothing: disabling launcherx while setupwraith stays enabled left an Onn stick in a
+# reboot loop with a black screen. So if any stock package can't be disabled safely, none is.
 WIFI_DUMP="$(adb shell dumpsys wifi 2>/dev/null | tr -d '\r')"
-SKIPPED=()
+PACKAGES="$(adb shell pm list packages -U 2>/dev/null | tr -d '\r')"
+BLOCKED=()
 for p in "${STOCK[@]}"; do
-  line="$(adb shell pm list packages -U 2>/dev/null | tr -d '\r' | grep "^package:$p uid:" || true)"
+  line="$(grep "^package:$p uid:" <<<"$PACKAGES" || true)"
   [[ -n "$line" ]] || continue
   uid="${line##*uid:}"
-  if grep -q " cuid=$uid " <<<"$WIFI_DUMP"; then
-    echo "! Skipping $p: it owns a saved Wi-Fi network and disabling it would erase it."
-    SKIPPED+=("$p")
-    continue
-  fi
-  echo "› Disabling $p"
-  adb shell pm disable-user --user 0 "$p" >/dev/null
+  grep -q " cuid=$uid " <<<"$WIFI_DUMP" && BLOCKED+=("$p")
 done
 
-if ((${#SKIPPED[@]})); then
+if ((${#BLOCKED[@]})); then
+  echo "! Not disabling the stock Home apps: ${BLOCKED[*]} owns your saved Wi-Fi network,"
+  echo "  and disabling it would erase it. Google TV's launcher stays enabled for now."
   cat <<'MSG'
 
   To finish: on the TV open Settings › Network & Internet, choose your Wi-Fi network,
-  pick "Forget", then join it again and type the password. That moves the
+  pick "Forget network", then join it again and type the password. That moves the
   saved network to the Settings app. Then run this script again.
 MSG
+else
+  for p in "${STOCK[@]}"; do
+    grep -q "^package:$p uid:" <<<"$PACKAGES" || continue
+    echo "› Disabling $p"
+    adb shell pm disable-user --user 0 "$p" >/dev/null
+  done
 fi
 
 echo "› Opening Home"
